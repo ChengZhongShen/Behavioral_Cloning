@@ -16,6 +16,8 @@ from keras.models import load_model
 import h5py
 from keras import __version__ as keras_version
 
+import cv2
+
 sio = socketio.Server()
 app = Flask(__name__)
 model = None
@@ -44,7 +46,7 @@ class SimplePIController:
 
 
 controller = SimplePIController(0.1, 0.002)
-set_speed = 9
+set_speed = 10
 controller.set_desired(set_speed)
 
 
@@ -61,6 +63,9 @@ def telemetry(sid, data):
         imgString = data["image"]
         image = Image.open(BytesIO(base64.b64decode(imgString)))
         image_array = np.asarray(image)
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2YUV) # added since tensorflow 1.3.0 don't support tf.image.rgb_to_yuv
+        image_array = cv2.resize(image_array, (200, 100)) # resize the image to (100, 200) note opencv use (x, y)==(width, height), np.array use(height, width)
+        image_array = image_array[25:91,:,:] # crop the image to (66, 100)
         steering_angle = float(model.predict(image_array[None, :, :, :], batch_size=1))
 
         throttle = controller.update(float(speed))

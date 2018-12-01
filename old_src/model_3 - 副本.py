@@ -1,0 +1,496 @@
+# CarND Project
+
+# import lib, the tensorflow and keras imported in the function which used them
+import csv
+import matplotlib.pyplot as plt
+import cv2
+import pickle
+from tqdm import tqdm
+import numpy as np
+import sys
+
+def load_log_file(path):
+    '''
+    read the log file in the path folder
+    return a list contain the log information
+    '''
+    lines = []
+    with open(path+'driving_log.csv') as csvfile:
+        reader = csv.reader(csvfile)
+        for line in reader:
+            lines.append(line) # line content: center   left    right   steering    throttle    brake   speed
+
+    lines = lines[1:] # get rid of first line which inlcude colum label
+
+    return lines
+
+def load_images(images, steerings, path, split, sub_read=False, sample_balance=False):
+    '''
+    append the center image to the list 'images'.
+    append the steering data to list 'steerings'
+    path: the data folder
+    split: "/" lod file from  Linux system;  "\\" log file  from windows system
+    sub_read: False or int, if number inputted, will just read the number recevied
+    sample_balance: False/0 or int (1, 101), balance the steering data will >50% is zero or <0.02 (steering is -1.0-1.0, 0.02 is 1%, just cosider the number < 1% is noise)
+                    another view of point, steering < 0.02, the car will keep straight forward, 
+                    this is affect the cars perfomace in curve lane, when the >50% data feed to the model is just keep the car straight forword
+    '''
+    print("Loading Centeral image from: ", path)
+    lines = load_log_file(path)
+
+    num_before = len(images)
+
+    if sub_read:
+        print("Will loading {} images".format(sub_read))
+    else:
+        print("Will loading {} images".format(len(lines)))
+
+    if sample_balance:
+        print("Sample balance, {} percent steering<0.02 image will be keeped.".format(sample_balance))
+
+    for indx, line in enumerate(lines):
+        # skip the the loop after load __ images, for debug/tester
+        if sub_read:
+            if indx == sub_read:
+                break      
+        image_source = line[0] # the image path in the cvs file(recorded path)
+        filename = image_source.split(split)[-1]
+        image_path = path + 'IMG/' + filename
+
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # Note, the drive.py feed simulator RGB image(160,320,3)
+        
+        steering = float(line[3])
+        # check the steering and decide if need append the data to the list, if zero, skip
+        if sample_balance:
+            if abs(steering) < 0.02 and np.random.randint(0, 99) < 100 - sample_balance: #and np.random.randint(0,10) < 10: # controal the percent, 10 100% get rid of
+                # if np.random.randint(-1, 2) == 0 # control the percent of zero get rid of
+                continue
+
+        images.append(image)
+        steerings.append(steering)
+    
+    num_after = len(images)
+    print("Actual loading {} images.".format(num_after-num_before))
+    print()
+
+def load_sides_images(images, steerings, path, split, offset, sub_read=False, sample_balance=False):
+    '''
+    append the left/right image to the list 'images'.
+    append the offseted steering data to list 'steerings'
+    path: the data folder
+    split: "/" lod file from  Linux system;  "\\" log file keeped from windows system
+    offset: offset the steering of light/right images
+    sub_read: False or int, if number inputted, will just read the number recevied
+    sample_balance: False or int (0, 101), balance the steering data will >50% is zero or <0.02 (steering is -1.0-1.0, 0.02 is 1%, just cosider the number < 1% is noise)
+                    another view of point, steering < 0.02, the car will keep straight forward, 
+                    this is affect the cars perfomace in curve lane, when the >50% data feed to the model is just keep the car straight forword
+                    Note: seems sample_balnce for side images is not neccessary. (Decided if get rid of later)
+    '''
+    
+    print("Loading Left/Right image from: ", path)
+    print("Left image will offset: {}, Right images will offset: {}".format(-offset, offset))
+    
+    lines = load_log_file(path)    
+    
+    num_before = len(images)
+    
+    if sub_read:
+        print("Will loading {} images".format(sub_read*2))
+    else:
+        print("Will loading {} images".format(len(lines)*2))
+
+    if sample_balance:
+        print("Sample balance, {} percent steering<0.02 image will be keeped.".format(sample_balance))    
+
+    
+    for indx, line in tqdm(enumerate(lines)):
+        # skip the the loop after load 500 images, for debug
+        if sub_read:
+            if indx == sub_read:
+                break 
+
+        image_source_left = line[1] # the image path in the cvs file(recorded path)
+        filename_left = image_source_left.split(split)[-1]
+        image_path_left = path + 'IMG/' + filename_left
+
+        image_source_right = line[2] # the image path in the cvs file(recorded path)
+        filename_right = image_source_right.split(split)[-1]
+        image_path_right = path + 'IMG/' + filename_right
+
+
+        image_left = cv2.imread(image_path_left)    
+        image_left = cv2.cvtColor(image_left, cv2.COLOR_BGR2RGB)
+
+        image_right = cv2.imread(image_path_right)   
+        image_right = cv2.cvtColor(image_right, cv2.COLOR_BGR2RGB)
+
+        steering = float(line[3])
+       
+        if sample_balance:
+            if abs(steering + offset) < 0.02 and np.random.randint(0, 99) < 100 - sample_balance: 
+                continue
+        images.append(image_left)
+        steerings.append(steering + offset)
+
+        if sample_balance:
+            if abs(steering - offset) < 0.02 and np.random.randint(0, 99) < 100 - sample_balance: 
+                continue
+        images.append(image_right)
+        steerings.append(steering - offset)
+    
+    num_after = len(images)
+    print("Actual loading {} images.".format(num_after-num_before))
+    print()      
+
+def image_rotate(image, angle):
+    """
+    rotate the image 
+    """
+    image_shape = image.shape
+    center = (image_shape[1]//2, image_shape[0]//2)
+    scale = 1.0
+    M = cv2.getRotationMatrix2D(center, angle, scale)
+    image = cv2.warpAffine(image, M, (image_shape[1], image_shape[0]))
+    return image
+
+def image_shift(image, dx, dy):
+    '''
+    shift the image dx and dy
+    '''
+    image_shape = image.shape
+    M = np.float32([[1,0,dx], [0,1,dy]])
+    image = cv2.warpAffine(image, M, (image_shape[1], image_shape[0]))
+    return image
+
+def images_augmentation(images, steerings, factor=1.0, rotate=15, shift=0.2):
+    """
+    rotate and shift the images randomly
+    factor: the muli number of augmentation numbers 1.0 = 1.0x, 2.0=2.0x
+    rotate: rotate angle range >0
+    shift: shift range, muli the width and height
+    """
+    print("Begin augemenation the images {factor}X")
+    image_shape = images[0].shape
+    num_images = len(images)
+    num_aug = int(num_images * factor)
+
+    # (160, 320, 3)
+    width = int(image_shape[1] * shift)
+    height = int(image_shape[0] * shift)
+
+    for indx in range(num_aug):
+        if indx % 2 == 0: # rotate
+            angle = np.random.randint(-rotate, rotate+1)
+            image = image_rotate(images[indx%num_images], angle)
+            images.append(image)
+            steerings.append(steerings[indx%num_images])
+        else:
+            dx = np.random.randint(-width, width+1)
+            dy = np.random.randint(-height, height+1)
+            image = image_shift(images[indx%num_images], dx, dy)
+            images.append(image)
+            steerings.append(steerings[indx%num_images])
+
+    print("Data augmentation Done!!!")            
+
+def flip_images(images, steerings):
+    '''
+    flip the image left/right, the steering will be mul (-1)
+    '''
+    print("Flip the images...")
+    images_flipped = []
+    steerings_flipped = []
+    for image, steering in zip(images, steerings):
+        image_flipped = np.fliplr(image)
+        steering_flipped = steering * (-1)
+        images_flipped.append(image_flipped)
+        steerings_flipped.append(steering_flipped)
+
+    # add the flipped image to images
+    for image_filpped, steering_flipped in zip(images_flipped, steerings_flipped):
+        images.append(image_flipped)
+        steerings.append(steering_flipped)
+
+def model_lenet(save_name):
+    '''
+    the name should be *.h5
+    '''
+    model = Sequential()
+
+    # data preprocess
+    model.add(Lambda(lambda x: x / 255.0 - 0.5, input_shape=(160,320,3)))
+    # Layer 1 Conv
+    model.add(Conv2D(32, (3,3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Dropout(0.2)) # keras dropout para is the problity of get rid of the nero
+    # # Layer 2 Conv
+    # model.add(Conv2D(64, (3,3), activation='relu'))
+    # model.add(MaxPooling2D(pool_size=(2,2)))
+    # model.add(Dropout(0.2))
+    # Layer 3 FC
+    model.add(Flatten())
+    model.add(Dense(500))
+    model.add(Dropout(0.5))
+    # Layer 4 FC
+    model.add(Dense(100))
+    model.add(Dropout(0.5))
+    # layer 5
+    model.add(Dense(1))    
+
+    model.compile(loss='mse', optimizer='adam', metrics=['accuracy'])
+    history=model.fit(X_train, y_train, validation_split=0.2, shuffle=True, epochs=1)
+
+    model.save('model_lenet.h5')
+
+def cvt_hsv(x):
+    '''
+    use tensorflow function to convert image. (input is tensor, opencv just hand images)
+    '''
+    import tensorflow as tf
+    return tf.image.rgb_to_hsv(x)
+
+def cvt_yuv(x):
+    '''
+    use tensorflow function to convert image. (input is tensor, opencv just hand images)
+    rgb_to_yuv not worked at tensorflow 1.3.0, it should be worked at tensorflow 1.8.0
+    '''
+    import tensorflow as tf
+    return tf.image.rgb_to_yuv(x)
+
+def preprocess_rgb(x):
+    '''
+    preprocess the image from drive.py and feed to nvidia network.
+    input (160, 320, 3) RGB
+    output (66, 200, 3) RGB
+    '''
+    import tensorflow as tf
+    x = tf.image.resize_images(x, (100, 200))
+    x = tf.image.crop_to_bounding_box(x, offset_height=25, offset_width=0, target_height=66, target_width=200)   
+    
+    return x
+
+def preprocess_hsv(x):
+    '''
+    preprocess the image from drive.py and feed to nvidia network.
+    input (160, 320, 3) RGB
+    output (66, 200, 3) hsv
+    '''
+    import tensorflow as tf
+    x = cvt_hsv(x)
+    x = tf.image.resize_images(x, (100, 200))
+    x = tf.image.crop_to_bounding_box(x, offset_height=25, offset_width=0, target_height=66, target_width=200)     
+    return x
+
+def preprocess_yuv(x):
+    '''
+    preprocess the image from drive.py and feed to nvidia network.
+    input (160, 320, 3) RGB
+    output (66, 200, 3) yuv
+    '''
+    import tensorflow as tf
+    x = cvt_yuv(x)
+    x = tf.image.resize_images(x, (100, 200))
+    x = tf.image.crop_to_bounding_box(x, offset_height=25, offset_width=0, target_height=66, target_width=200)     
+    return x
+
+def model_nvidia(X_train, y_train, save_name, color='RGB', epoch=10):
+    '''
+    the name should be *.h5
+    https://images.nvidia.com/content/tegra/automotive/images/2016/solutions/pdf/end-to-end-dl-using-px.pdf
+    '''
+    # Built the model
+    from keras.models import Sequential
+    from keras.layers import Flatten, Dense, Lambda
+    from keras.layers import Conv2D, MaxPooling2D, Dropout, Cropping2D
+    
+    print("Loading the model...")
+
+    model = Sequential()
+
+    # data preprocess
+    model.add(Cropping2D(cropping=((50,20), (0,0)), input_shape=(160,320, 3))) # crop the image
+    # choice color
+    if color == "RGB":
+        print("Using RGB color channel")
+        pass
+    elif color == "YUV":
+        model.add(Lambda(cvt_yuv)) # yuv not worked at tensorflow 1.3.0, it should be worked at tensorflow 1.8.0
+        print("Using YUV color channel")
+    elif color == "HSV":
+        model.add(Lambda(cvt_hsv))
+        print("Using HSV color channel")
+    else:
+        print('Wrong color choice, valid color is "RGB", "YUV", "HSV"')
+        sys.exit()
+    model.add(Lambda(lambda x: x / 255.0 - 0.5)) # normalize
+    
+    # Layer 1 Conv
+    model.add(Conv2D(24, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Dropout(0.2)) # keras dropout para is the problity of get rid of the nero
+    # Layer 2 Conv
+    model.add(Conv2D(36, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Dropout(0.2))
+    # Layer 3 Conv
+    model.add(Conv2D(48, (3,3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Dropout(0.2))
+    # Layer 4 Conv
+    model.add(Conv2D(64, (3,3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Dropout(0.2))        
+    # Layer 5 FC
+    model.add(Flatten())
+    model.add(Dense(1164))
+    model.add(Dropout(0.5))
+    # Layer 6 FC
+    model.add(Dense(100))
+    model.add(Dropout(0.5))
+    # Layer 7 FC
+    model.add(Dense(50))
+    model.add(Dropout(0.5))
+    # layer 8
+    model.add(Dense(1))    
+
+    model.compile(loss='mse', optimizer='adam')
+    print("Loss is MSE, optimizer is adam")
+    history=model.fit(X_train, y_train, batch_size=256, validation_split=0.2, shuffle=True, epochs=epoch)
+
+    model.save(save_name)
+    print(save_name, 'saved!!!')
+
+def model_nvidia2(X_train, y_train, save_name, color='RGB', epoch=10):
+    '''
+    2018/11/27 rewrite the nvidia model according the papaer. (add three color choice, RGB/HSV/YUV)
+    Trid tensorflow 1.8.0, but the speed of Workspace is not acceptable.
+    the name should be *.h5
+    https://images.nvidia.com/content/tegra/automotive/images/2016/solutions/pdf/end-to-end-dl-using-px.pdf
+    '''
+    # Built the model
+    from keras.models import Sequential
+    from keras.layers import Flatten, Dense, Lambda
+    from keras.layers import Conv2D, MaxPooling2D, Dropout, Cropping2D
+    
+    print("Loading the model...")
+
+    model = Sequential()
+
+    # choice color
+    if color == "RGB":
+        model.add(Lambda(preprocess_rgb, input_shape=(160,320,3))) 
+        print("Using RGB color channel")
+    elif color == "YUV":
+        model.add(Lambda(preprocess_yuv, input_shape=(160,320,3)))
+        print("Using YUV color channel")
+    elif color == "HSV":
+        model.add(Lambda(preprocess_hsv, input_shape=(160,320,3))) 
+        print("Using HSV color channel")
+    else:
+        print('Wrong color choice, valid color is "RGB", "YUV", "HSV"')
+        sys.exit()
+
+    # Normalize Input (66, 200, 3)
+    model.add(Lambda(lambda x: x / 255.0 - 0.5)) # normalize
+    
+    # Conv1 (66, 200, 3) --> (31, 98, 24)
+    model.add(Conv2D(24, kernel_size=(5,5), strides=(2,2), padding='valid', activation='relu'))
+    # model.add(MaxPooling2D(pool_size=(2,2)))
+    # model.add(Dropout(0.2)) # keras dropout para is the problity of get rid of the nero
+    # Conv2 (31, 98, 24) --> (14, 47, 36)
+    model.add(Conv2D(36, kernel_size=(5,5), strides=(2,2), padding='valid', activation='relu'))
+    # model.add(MaxPooling2D(pool_size=(2,2)))
+    # model.add(Dropout(0.2))
+    # Conv3 (14, 47, 36) --> (48, 5, 22)
+    model.add(Conv2D(48, kernel_size=(5,5), strides=(2,2), padding='valid', activation='relu'))
+    # model.add(MaxPooling2D(pool_size=(2,2)))
+    # model.add(Dropout(0.2))
+    # Conv4 (48, 5, 22) --> (64, 3, 20)
+    model.add(Conv2D(64, kernel_size=(3,3), strides=(1,1), padding='valid', activation='relu'))
+    # model.add(MaxPooling2D(pool_size=(2,2)))
+    # model.add(Dropout(0.2))  
+    # Conv5, (64, 3, 20) --> (64, 1, 18)
+    model.add(Conv2D(64, kernel_size=(3,3), strides=(1,1), padding='valid', activation='relu'))   
+    # FC1
+    model.add(Flatten())
+    model.add(Dense(1164))
+    # model.add(Dropout(0.5))
+    # FC2
+    model.add(Dense(100))
+    # model.add(Dropout(0.5))
+    # FC3
+    model.add(Dense(50))
+    # model.add(Dropout(0.5))
+    # FC4
+    model.add(Dense(10))
+    # model.add(Dropout(0.5))
+    # Out put
+    model.add(Dense(1))
+        
+
+    model.compile(loss='mse', optimizer='adam')
+    print("Loss is MSE, optimizer is adam")
+    history=model.fit(X_train, y_train, batch_size=256, validation_split=0.2, shuffle=True, epochs=epoch)
+
+    model.save(save_name)
+    print(save_name, 'saved!!!')
+
+def train_model(data_path, data_split='/', data_sub_read=False, data_sample_balance=False, sides_image=True, sides_image_offset=0.22, data_augmentation=1, 
+                model='nvidia', input_color='RGB', train_epoch=10):
+    '''
+    main function training the model
+    ''' 
+    image_shape = (160, 320, 3) # image shape date will be used in other functions
+
+    # cread the list to hold the features and labels
+    images = []
+    steerings = []
+   
+    # read data
+    load_images(images, steerings, path=data_path, split=data_split, sub_read=data_sub_read, sample_balance=data_sample_balance)
+    
+    if sides_image:
+        load_sides_images(images, steerings, path=data_path, split=data_split, sub_read=data_sub_read, sample_balance=data_sample_balance, offset=sides_image_offset)   
+
+    # Data Augmentation
+    # flip_images()
+    if data_augmentation:
+        images_augmentation(images, steerings, factor=data_augmentation) 
+
+    # Generate the training data
+    print("Gen X_train, y_train array from loaded images")
+    X_train = np.array(images)
+    y_train = np.array(steerings)
+
+    # print the samples information
+    print('Sample number: ', len(X_train))
+    print("Sample shape: ", X_train.shape)
+    print("Image shape: ", X_train[0].shape)
+    print('Sample label number: ', len(y_train))
+    print()
+
+    # training the model
+    if model == 'nvidia':
+        model_name="model_{}_sides{}_{}_dataBalance{}_{}_aug{}_ep{}.h5".format(
+                        model,sides_image,sides_image_offset,data_sample_balance,input_color,data_augmentation,train_epoch)
+        print(model_name, 'will be training and saved!!')
+        print()
+        model_nvidia(X_train, y_train, model_name, color=input_color, epoch=train_epoch)
+    elif model == 'nvidia2':
+        model_name="model_{}_sides{}_{}_dataBalance{}_{}_aug{}_ep{}.h5".format(
+                        model,sides_image,sides_image_offset,data_sample_balance,input_color,data_augmentation,train_epoch)
+        print(model_name, 'will be training and saved!!')
+        print()
+        model_nvidia2(X_train, y_train, model_name, color=input_color, epoch=train_epoch)
+    
+    elif model == 'lenet':
+        pass
+    else:
+        print('Wrong model choice, valid color is "nvidia", "lenet", "???"')
+        sys.exit()
+
+if __name__ == '__main__':
+
+    train_model(data_path='./data/', data_split='/', data_sub_read=False, data_sample_balance=0.01, sides_image=True, sides_image_offset=0.22, data_augmentation=0, 
+                model='nvidia2', input_color='RGB', train_epoch=10)
